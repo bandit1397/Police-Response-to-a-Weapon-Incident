@@ -119,7 +119,7 @@ mark{background:#ffe27a;color:#000}
 </div>
 <script>
 (function(){
- var KEY='weapon-manual-v1', store={};
+ var KEY='weapon-manual-v2', store={};
  function get(k,d){try{var v=localStorage.getItem(k);return v===null?d:v}catch(e){return store[k]===undefined?d:store[k]}}
  function set(k,v){try{localStorage.setItem(k,v)}catch(e){store[k]=v}}
  var checks=JSON.parse(get(KEY,'{}'));
