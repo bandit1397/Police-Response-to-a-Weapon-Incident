@@ -159,6 +159,8 @@ def render_role(doc, role):
             if nd["title"] in ids:
                 sys.exit(f"칸 제목 중복: {nd['title']}")
             ids[nd["title"]] = nd["id"]
+        else:
+            ids[nd["title"]] = nd["id"]
 
     def chips(branches):
         out = []
