@@ -102,6 +102,28 @@ details.law li,details.law p{font-size:14.5px}
 table{border-collapse:collapse;width:100%;font-size:14.5px}
 th,td{border:1px solid var(--line);padding:6px 7px;text-align:left;vertical-align:top}
 th{background:var(--bg)}
+.memo{position:fixed;left:0;right:0;bottom:0;z-index:15;background:var(--card);border-top:2px solid var(--c);box-shadow:0 -2px 8px rgba(0,0,0,.25);padding:6px 8px calc(6px + env(safe-area-inset-bottom))}
+.memo[hidden]{display:none}
+.memo-in{max-width:760px;margin:0 auto}
+.memo-row{display:flex;gap:6px}
+.slot{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.slot button{font:inherit;cursor:pointer;border-radius:8px}
+.mbtn{min-height:60px;padding:4px 2px;border:2px solid var(--c);background:var(--bg);color:var(--ink);line-height:1.25}
+.mbtn b{display:block;font-size:15px}
+.mbtn small{display:block;font-size:12px;color:var(--mut)}
+.slot.has .mbtn{background:var(--c);color:#fff}
+.slot.has .mbtn small{color:#fff}
+html[data-theme=dark] .slot.has .mbtn,html[data-theme=dark] .slot.has .mbtn small{color:#10141a}
+.slot.recing .mbtn{background:var(--ban);border-color:var(--ban);color:#fff}
+.slot.recing .mbtn small{color:#fff}
+html[data-theme=dark] .slot.recing .mbtn,html[data-theme=dark] .slot.recing .mbtn small{color:#10141a}
+.redo{min-height:34px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:13px}
+.redo[hidden]{display:none}
+.memo-foot{display:flex;align-items:center;gap:8px;margin-top:4px}
+.memo-foot p{flex:1;margin:0;font-size:12px;line-height:1.35;color:var(--mut)}
+.memo-foot p.err{color:var(--ban);font-weight:700}
+#memoClear{flex:none;min-height:34px;padding:0 8px;border:1px solid var(--ban);border-radius:8px;background:var(--card);color:var(--ban);font:inherit;font-size:13px;cursor:pointer}
+body.memo-on main{padding-bottom:170px}
 @media(max-width:620px){
  .stack thead{display:none}
  .stack,.stack tbody,.stack tr,.stack td{display:block;width:100%}
@@ -113,7 +135,7 @@ th{background:var(--bg)}
 @media print{
  @page{size:A5;margin:10mm}
  body{background:#fff;color:#000;font-size:10.5pt}
- header,.tools,.search,#results{display:none!important}
+ header,.tools,.search,#results,.memo{display:none!important}
  main{padding:0;max-width:none}
  .node,.dec{break-inside:avoid-page}
  .arrow{height:10px}
@@ -140,6 +162,16 @@ th{background:var(--bg)}
  </section>
  {{VIEWS}}
 </main>
+ <section class="memo" id="memo" aria-label="출동 음성 메모" hidden>
+  <div class="memo-in">
+   <div class="memo-row">
+    <div class="slot" data-name="사건위치"><button class="mbtn" type="button"><b>사건위치</b><small>눌러서 녹음</small></button><button class="redo" type="button" hidden>다시 녹음</button></div>
+    <div class="slot" data-name="인상착의"><button class="mbtn" type="button"><b>인상착의</b><small>눌러서 녹음</small></button><button class="redo" type="button" hidden>다시 녹음</button></div>
+    <div class="slot" data-name="도주경로"><button class="mbtn" type="button"><b>도주경로</b><small>눌러서 녹음</small></button><button class="redo" type="button" hidden>다시 녹음</button></div>
+   </div>
+   <div class="memo-foot"><p id="memoMsg"></p><button id="memoClear" type="button">전체 삭제</button></div>
+  </div>
+ </section>
 <script>
 (function(){
  var KEY='weapon-manual-v3',mem={};
@@ -179,6 +211,71 @@ th{background:var(--bg)}
  applyTheme(get('weapon-theme',matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));
  theme.onclick=function(){applyTheme(document.documentElement.dataset.theme==='dark'?'light':'dark')};
 
+ var memo=document.getElementById('memo'),memoMsg=document.getElementById('memoMsg');
+ var MEMO_TIP='동승자가 본인 목소리로 핵심만 녹음. 무전·대화는 녹음하지 않음. 저장되지 않고 화면을 닫으면 삭제됩니다.',MEMO_MAX=60;
+ var rec=null,asking=false,playing=null,player=new Audio();
+ var slots=$$('.slot',memo).map(function(el){return {el:el,name:el.dataset.name,main:el.querySelector('.mbtn'),redo:el.querySelector('.redo'),url:null,sec:0,at:''}});
+ function say(t,err){memoMsg.textContent=t||MEMO_TIP;memoMsg.classList.toggle('err',!!err)}
+ function paint(s){
+  var small=s.main.querySelector('small'),now=rec&&rec.slot===s;
+  s.el.classList.toggle('recing',!!now);s.el.classList.toggle('has',!!s.url&&!now);
+  s.redo.hidden=!s.url||!!now;
+  if(now)small.textContent='● 녹음 중 '+rec.sec+'초 · 눌러서 끝';
+  else if(playing===s)small.textContent='재생 중 · 눌러서 정지';
+  else if(s.url)small.textContent='▶ '+s.at+' · '+s.sec+'초';
+  else small.textContent='눌러서 녹음';
+ }
+ function stopPlay(){var s=playing;playing=null;player.pause();if(s)paint(s)}
+ function endRec(discard){
+  if(!rec)return;
+  var r=rec;r.discard=!!discard;clearInterval(r.timer);rec=null;paint(r.slot);
+  if(r.mr.state!=='inactive')r.mr.stop();
+ }
+ function startRec(s){
+  if(rec){var same=rec.slot===s;endRec();if(same)return}
+  if(asking)return;
+  stopPlay();
+  if(!window.MediaRecorder||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){say('이 브라우저에서는 녹음을 쓸 수 없습니다.',true);return}
+  asking=true;
+  navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
+   asking=false;
+   var mr=new MediaRecorder(stream),chunks=[],r={mr:mr,slot:s,sec:0,discard:false};
+   mr.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};
+   mr.onstop=function(){
+    stream.getTracks().forEach(function(t){t.stop()});
+    if(!r.discard&&chunks.length){
+     if(s.url)URL.revokeObjectURL(s.url);
+     var d=new Date();
+     s.url=URL.createObjectURL(new Blob(chunks,{type:mr.mimeType||'audio/webm'}));
+     s.sec=Math.max(1,r.sec);s.at=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+     say(s.name+' 녹음 완료. 누르면 다시 들을 수 있습니다.');
+    }else if(!r.discard)say('녹음된 내용이 없습니다. 다시 녹음하세요.',true);
+    paint(s);
+   };
+   mr.start();rec=r;say(s.name+' 녹음 중. 최대 '+MEMO_MAX+'초입니다.');paint(s);
+   r.timer=setInterval(function(){r.sec++;paint(s);if(r.sec>=MEMO_MAX)endRec()},1000);
+  }).catch(function(){asking=false;say('마이크를 쓸 수 없습니다. 브라우저의 마이크 권한을 확인하세요.',true)});
+ }
+ function play(s){
+  if(playing===s){stopPlay();return}
+  stopPlay();playing=s;player.src=s.url;paint(s);
+  var p=player.play();
+  if(p&&p.catch)p.catch(function(){if(playing===s){stopPlay();say('재생할 수 없습니다.',true)}});
+ }
+ player.onended=stopPlay;
+ slots.forEach(function(s){
+  s.main.onclick=function(){if(rec&&rec.slot===s)endRec();else if(s.url&&!rec)play(s);else startRec(s)};
+  s.redo.onclick=function(){startRec(s)};
+ });
+ document.getElementById('memoClear').onclick=function(){
+  endRec(true);stopPlay();player.removeAttribute('src');
+  slots.forEach(function(s){if(s.url)URL.revokeObjectURL(s.url);s.url=null;s.sec=0;paint(s)});
+  say('음성 메모를 모두 삭제했습니다.');
+ };
+ document.addEventListener('visibilitychange',function(){if(document.hidden)endRec()});
+ window.addEventListener('pagehide',function(){endRec(true)});
+ say();
+
  function route(){
   var id=decodeURIComponent(location.hash.slice(1))||'home';
   var el=document.getElementById(id);
@@ -186,6 +283,9 @@ th{background:var(--bg)}
   var view=el.classList.contains('view')?el:el.closest('.view');
   $$('.view').forEach(function(v){v.classList.toggle('on',v===view)});
   $$('.tabs a').forEach(function(a){a.classList.toggle('on',a.dataset.tab===view.id)});
+  var onField=view.id==='field';
+  if(!onField){endRec();stopPlay()}
+  memo.hidden=!onField;document.body.classList.toggle('memo-on',onField);
   if(el===view){window.scrollTo(0,0);return}
   if(el.tagName==='DETAILS')el.open=true;
   el.scrollIntoView();
