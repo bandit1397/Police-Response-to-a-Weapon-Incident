@@ -237,7 +237,7 @@ html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
  theme.onclick=function(){applyTheme(document.documentElement.dataset.theme==='dark'?'light':'dark')};
 
  var memo=document.getElementById('memo'),memoMsg=document.getElementById('memoMsg');
- var MEMO_TIP='본인 확인용 메모. 동승자가 본인 목소리로 핵심만 녹음. 무전·대화는 녹음하지 않음. 저장되지 않고 화면을 닫으면 삭제됩니다.',MEMO_MAX=60;
+ var MEMO_TIP='본인 확인용 메모. 동승자가 본인 목소리로 핵심만 녹음. 무전·대화는 녹음하지 않음. 저장되지 않고 화면을 닫으면 삭제됩니다.',MEMO_MAX=600;
  var rec=null,asking=false,playing=null,player=new Audio();
  var SR=window.SpeechRecognition||window.webkitSpeechRecognition,stt=false,MOBILE=/Android|iPhone|iPad|iPod/.test(navigator.userAgent);
  var sttBox=document.getElementById('memoStt'),sttWarn=document.getElementById('sttWarn'),sttBtn=document.getElementById('sttToggle');
@@ -289,7 +289,9 @@ html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
    }
    paintText();paint(r.slot);
   }
+  var t0=0,quick=0;
   function begin(){
+   t0=Date.now();
    try{x.start(r.track)}catch(e){
     try{x.start()}catch(e2){r.sttFail=true;say('글자 변환을 시작하지 못했습니다.',true);x.onend()}
    }
@@ -300,6 +302,7 @@ html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
     var t=e.results[i][0].transcript;
     if(e.results[i].isFinal)r.final+=t+' ';else mid+=t;
    }
+   r.mid=mid;
    if(!r.dead){r.entry.text=(r.final+mid).trim();paintText()}
   };
   x.onerror=function(e){
@@ -307,13 +310,17 @@ html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
    r.sttFail=true;say('글자 변환에 실패했습니다('+e.error+').'+(r.textOnly?'':' 녹음은 계속됩니다.'),true);
   };
   x.onend=function(){
+   if(r.mid){r.final+=r.mid+' ';r.mid=''}
+   quick=Date.now()-t0<500?quick+1:0;
+   if(quick>=3&&!r.sttFail&&rec===r){r.sttFail=true;say('글자 변환이 계속 끊겨 중지했습니다.',true)}
+   if(rec===r&&stt&&!r.sttFail){begin();return}
    if(r.textOnly){
     if(rec===r){clearInterval(r.timer);rec=null}
     done();paint(r.slot);
     if(!r.sttFail&&!r.dead&&r.entry.text)say(r.slot.name+' 글자 변환 완료. 음성은 녹음되지 않았습니다.');
     return;
    }
-   if(rec===r&&stt&&!r.sttFail)begin();else done();
+   done();
   };
   begin();
  }
@@ -344,7 +351,7 @@ html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
   stopPlay();
   if(stt&&SR&&MOBILE){
    var t={mr:null,slot:s,sec:0,discard:false,textOnly:true};
-   rec=t;say(s.name+' 글자 변환 중. 말을 멈추면 끝납니다.');paint(s);
+   rec=t;say(s.name+' 글자 변환 중. 다시 누르면 끝납니다.');paint(s);
    t.timer=setInterval(function(){t.sec++;paint(s);if(t.sec>=MEMO_MAX)endRec()},1000);
    sttStart(t);
    return;
@@ -366,7 +373,7 @@ html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
     }else if(!r.discard)say('녹음된 내용이 없습니다. 다시 녹음하세요.',true);
     paint(s);
    };
-   mr.start();rec=r;say(s.name+' 녹음 중. 최대 '+MEMO_MAX+'초입니다.');paint(s);
+   mr.start();rec=r;say(s.name+' 녹음 중. 다시 누르면 끝납니다.');paint(s);
    if(stt&&SR){r.track=stream.getAudioTracks()[0].clone();sttStart(r)}
    r.timer=setInterval(function(){r.sec++;paint(s);if(r.sec>=MEMO_MAX)endRec()},1000);
   }).catch(function(e){asking=false;say('마이크를 쓸 수 없습니다('+e.name+'). 브라우저의 마이크 권한을 확인하세요.',true)});
