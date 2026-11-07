@@ -4,9 +4,13 @@ MANUAL.md가 유일한 원본입니다. index.html은 직접 고치지 말고 �
 
 MANUAL.md 작성 규칙
   ## [역할] 이름 | 설명        역할별 흐름도
+  > 핵심: 문장                  현장 직원 첫 화면의 핵심 행동 (## [역할] 바로 아래)
+  ### = 단계 이름 | 설명        흐름도를 묶는 단계 제목
   ### 칸 제목 | 한 줄 요약      흐름도의 칸
   ### ? 판단 질문              판단 칸. 아래 "- 답 -> 칸 제목"으로 갈림길을 적음
   #### 금지 / 무전 / 완료 기준 / 근거 / 다음    칸 안의 항목
+  ## [상황] 이름 | 설명 | 등급  현장 직원 긴급 카드. 등급은 위급/위험/주의/통제.
+                               "1. **행동** 설명" 순서와 #### 항목을 적은 차례대로 표시
   ## [참고] 이름 | 설명        참고 자료
   [[참고 이름]]                참고 자료로 가는 링크
 
@@ -24,6 +28,8 @@ TEMPLATE = ROOT / "template.html"
 
 ROLE_ID = {"현장 직원": "field", "현장 책임자": "command", "112상황실": "dispatch", "수사부서": "invest"}
 PARTS = {"금지": "ban", "무전": "talk", "완료 기준": "done", "근거": "law", "다음": "next"}
+TONE = {"위급": "red", "위험": "amber", "주의": "blue", "통제": "green"}
+SIT_PARTS = {"금지": "ban", "무전": "talk", "명령": "cmd"}
 BRANCH = re.compile(r"^- (.+?) -> (.+)$", re.M)
 
 
@@ -111,15 +117,24 @@ def parse(text):
     parts = re.split(r"^## ", text, flags=re.M)
     title = parts[0].split("\n", 1)[0].lstrip("# ").strip()
     notice = [l[2:] for l in parts[0].splitlines() if l.startswith("> ")]
-    roles, refs = [], []
+    roles, refs, sits = [], [], []
     for p in parts[1:]:
         head, body = p.split("\n", 1)
-        kind = re.match(r"\[(역할|참고)\] (.+?) \| (.+)", head)
+        kind = re.match(r"\[(역할|참고|상황)\] (.+?) \| (.+)", head)
         if not kind:
             sys.exit(f"구역 제목 오류: {head}")
         item = dict(name=kind[2], desc=kind[3], body=body.strip())
-        (roles if kind[1] == "역할" else refs).append(item)
-    return title, notice, roles, refs
+        if kind[1] == "상황":
+            item["desc"], tone = [x.strip() for x in kind[3].rsplit("|", 1)]
+            if tone not in TONE:
+                sys.exit(f"없는 등급: {tone} ({kind[2]})")
+            item["tone"] = TONE[tone]
+            if "- [ ] " in body:
+                sys.exit(f"긴급 카드에는 체크 항목을 두지 않습니다: {kind[2]}")
+            sits.append(item)
+        else:
+            (roles if kind[1] == "역할" else refs).append(item)
+    return title, notice, roles, refs, sits
 
 
 def parse_nodes(body):
@@ -127,6 +142,10 @@ def parse_nodes(body):
     nodes = []
     for c in chunks[1:]:
         head, rest = (c.split("\n", 1) + [""])[:2]
+        if head.startswith("= "):
+            name, sub = [x.strip() for x in head[2:].split("|", 1)]
+            nodes.append(dict(kind="s", title=name, sub=sub))
+            continue
         if head.startswith("? "):
             branches = BRANCH.findall(rest)
             if len(branches) < 2:
@@ -147,12 +166,41 @@ def parse_nodes(body):
     return chunks[0].strip(), nodes
 
 
-def render_role(doc, role):
+def render_sits(doc, sits, chips):
+    grid, cards = [], []
+    for s in sits:
+        grid.append(f'<a class="sbtn" data-tone="{s["tone"]}" href="#{s["id"]}"><b>{doc.inline(s["name"])}</b><span>{doc.inline(s["desc"])}</span></a>')
+        secs = re.split(r"^#### ", s["body"], flags=re.M)
+        if not re.search(r"^1\. ", secs[0], re.M):
+            sys.exit(f"행동 순서 없는 카드: {s['name']}")
+        inner = [doc.blocks(secs[0], s["id"], [0])]
+        for sec in secs[1:]:
+            name, content = (sec.split("\n", 1) + [""])[:2]
+            name = name.strip()
+            if name == "다음":
+                inner.append(f'<h4 class="next">상황이 바뀌면</h4><div class="chips">{chips(BRANCH.findall(content))}</div>')
+            elif name == "근거":
+                inner.append(f'<details class="law"><summary>근거 조문</summary>{doc.blocks(content, s["id"], [0])}</details>')
+            else:
+                cls = SIT_PARTS.get(name, "plain")
+                inner.append(f'<div class="part {cls}"><h4>{doc.inline(name)}</h4>{doc.blocks(content, s["id"], [0])}</div>')
+        cards.append(f'<section class="sit" id="{s["id"]}" data-tone="{s["tone"]}" hidden><div class="sit-h"><h3>{doc.inline(s["name"])}</h3><a class="sit-x" href="#field">닫기</a></div><div class="sit-b">{"".join(inner)}</div></section>')
+    return "".join(grid), "".join(cards)
+
+
+def render_role(doc, role, sits=()):
     rid = ROLE_ID[role["name"]]
     quick, nodes = parse_nodes(role["body"])
     ids, no = {}, 0
+    for i, s in enumerate(sits):
+        s["id"] = f"sit-{i}"
+        if s["name"] in ids:
+            sys.exit(f"카드 제목 중복: {s['name']}")
+        ids[s["name"]] = s["id"]
     for i, nd in enumerate(nodes):
         nd["id"] = f"{rid}-{i}"
+        if nd["kind"] == "s":
+            continue
         if nd["kind"] == "n":
             no += 1
             nd["no"] = no
@@ -171,12 +219,24 @@ def render_role(doc, role):
             out.append(f'<a class="chip" href="#{ids[target]}"><b>{doc.inline(ans)}</b><span>{doc.inline(target)}</span></a>')
         return "".join(out)
 
-    quick = quick[2:] if quick.startswith("> ") else quick
+    lines = [l[2:] if l.startswith("> ") else l for l in quick.splitlines() if l.strip()]
+    core = [l[4:] for l in lines if l.startswith("핵심: ")]
+    quick = " ".join(l for l in lines if not l.startswith("핵심: "))
     out = [f'<section class="view" id="{rid}" data-color="{rid}"><div class="vh"><h2>{doc.inline(role["name"])}</h2><p>{doc.inline(role["desc"])}</p>']
+    if sits:
+        grid, cards = render_sits(doc, sits, chips)
+        out.append('</div><div class="now">')
+        if core:
+            out.append(f'<p class="core">{doc.inline(core[0])}</p>')
+        out.append(f'<h3>지금 상황을 누르세요</h3><div class="sitgrid">{grid}</div><p class="draft">검토용 초안입니다. 경찰청 공식 문서가 아닙니다.</p>{cards}</div>')
+        out.append('<div class="vh"><h2 class="h2s">단계별 체크리스트</h2><p>출동 전부터 종결까지 할 일과 근거 조문입니다.</p>')
     if quick:
         out.append(f'<p class="quick">{doc.inline(quick)}</p>')
     out.append('<div class="tools"><button data-act="open">모두 펼치기</button><button data-act="close">모두 접기</button><button data-act="reset">체크 초기화</button><button data-act="print">인쇄</button></div></div><div class="flow">')
     for i, nd in enumerate(nodes):
+        if nd["kind"] == "s":
+            out.append(f'<div class="stage"><b>{doc.inline(nd["title"])}</b><span>{doc.inline(nd["sub"])}</span></div>')
+            continue
         if nd["kind"] == "q":
             out.append(f'<div class="dec" id="{nd["id"]}"><p class="q">{doc.inline(nd["title"])}</p><div class="chips">{chips(nd["branches"])}</div></div>')
         else:
@@ -194,19 +254,19 @@ def render_role(doc, role):
                     inner.append(f'<div class="part {cls}"><h4>{name}</h4>{doc.blocks(content, nd["id"], counter)}</div>')
             sub = f"<small>{doc.inline(nd['sub'])}</small>" if nd["sub"] else ""
             out.append(f'<details class="node" id="{nd["id"]}"><summary><span class="no">{nd["no"]}</span><span class="tt"><b>{doc.inline(nd["title"])}</b>{sub}</span><span class="pg"></span></summary><div class="nb">{"".join(inner)}</div></details>')
-        if i < len(nodes) - 1:
+        if i < len(nodes) - 1 and nodes[i + 1]["kind"] != "s":
             out.append('<div class="arrow" aria-hidden="true"></div>')
     out.append("</div></section>")
     return "".join(out)
 
 
 def main():
-    title, notice, roles, refs = parse(SRC.read_text(encoding="utf-8"))
+    title, notice, roles, refs, sits = parse(SRC.read_text(encoding="utf-8"))
     if [r["name"] for r in roles] != list(ROLE_ID):
         sys.exit(f"역할 오류: {[r['name'] for r in roles]}")
     doc = Doc({r["name"]: f"ref-{i}" for i, r in enumerate(refs)})
 
-    views = "".join(render_role(doc, r) for r in roles)
+    views = "".join(render_role(doc, r, sits if r["name"] == "현장 직원" else ()) for r in roles)
     cards = "".join(f'<a class="card" data-color="{ROLE_ID[r["name"]]}" href="#{ROLE_ID[r["name"]]}"><b>{doc.inline(r["name"])}</b><span>{doc.inline(r["desc"])}</span></a>' for r in roles)
     tabs = "".join(f'<a href="#{ROLE_ID[r["name"]]}" data-tab="{ROLE_ID[r["name"]]}">{doc.inline(r["name"])}</a>' for r in roles)
 
@@ -222,7 +282,7 @@ def main():
     OUT.write_text(page, encoding="utf-8")
     checks = page.count('type="checkbox"')
     nodes = page.count('class="node"')
-    print(f"완료: {OUT.name} {len(page):,}자, 역할 {len(roles)}개, 흐름 칸 {nodes}개, 체크항목 {checks}개, 참고 {len(refs)}개")
+    print(f"완료: {OUT.name} {len(page):,}자, 역할 {len(roles)}개, 흐름 칸 {nodes}개, 긴급 카드 {len(sits)}개, 체크항목 {checks}개, 참고 {len(refs)}개")
 
 
 if __name__ == "__main__":
