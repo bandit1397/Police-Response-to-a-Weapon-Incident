@@ -14,6 +14,7 @@ MANUAL.md 작성 규칙
                                "1. **행동** 설명" 순서와 #### 항목을 적은 차례대로 표시
   ## [참고] 이름 | 설명        참고 자료
   [[참고 이름]]                참고 자료로 가는 링크
+  [글자](https://주소)         외부 사이트 링크 (새 탭으로 열림)
 
 갈림길이나 링크의 대상이 없거나, 칸에 할 일이 없으면 빌드가 실패합니다.
 """
@@ -51,7 +52,9 @@ class Doc:
                 sys.exit(f"없는 참고 링크: [[{name}]]")
             return f'<a class="ref" href="#{self.refs[name]}">{name}</a>'
 
-        return re.sub(r"\[\[(.+?)\]\]", link, s)
+        s = re.sub(r"\[\[(.+?)\]\]", link, s)
+        return re.sub(r"\[([^\[\]]+)\]\((https://[^\s)]+)\)",
+                      r'<a class="ref" href="\2" target="_blank" rel="noopener">\1</a>', s)
 
     def table(self, rows):
         cells = [[c.strip() for c in r.strip().strip("|").split("|")] for r in rows]
