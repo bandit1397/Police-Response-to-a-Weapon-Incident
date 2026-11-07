@@ -186,6 +186,18 @@ body.memo-on main{padding-bottom:var(--memo-h,70px)}
 #sttToggle{flex:none;min-height:34px;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font:inherit;font-size:13px;cursor:pointer}
 #sttToggle[aria-pressed=true]{background:var(--ban);border-color:var(--ban);color:#fff}
 html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
+.lr{padding:0;border:0;background:none;color:var(--c);font:inherit;font-weight:700;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+#law{width:min(640px,calc(100vw - 16px));max-height:82vh;padding:0;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink)}
+#law::backdrop{background:rgba(0,0,0,.5)}
+#law[open]{display:flex;flex-direction:column}
+.law-h{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}
+.law-h b{flex:1;font-size:16px;line-height:1.35}
+#lawX{flex:none;min-width:64px;min-height:44px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit;font-weight:700;cursor:pointer}
+#lawBody{padding:8px 12px;overflow-y:auto;font-size:16px;line-height:1.6}
+#lawBody p{margin:0 0 8px;padding:2px 4px;border-radius:6px}
+#lawBody p.hit{background:var(--banbg);font-weight:700}
+.law-f{padding:8px 12px;border-top:1px solid var(--line);font-size:13px;line-height:1.4;color:var(--mut)}
+.law-f a{color:var(--c);font-weight:700}
 @media(max-width:620px){
  .stack thead{display:none}
  .stack,.stack tbody,.stack tr,.stack td{display:block;width:100%}
@@ -206,6 +218,7 @@ html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
  .node,.dec{break-inside:avoid-page}
  .arrow{height:10px}
  .part{background:none;border:1px solid #999}
+ .lr{color:inherit;font-weight:inherit;text-decoration:none}
 }
 </style>
 </head>
@@ -246,6 +259,8 @@ html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
    </div>
   </div>
  </section>
+<dialog id="law" aria-labelledby="lawT"><div class="law-h"><b id="lawT"></b><button id="lawX" type="button">닫기</button></div><div id="lawBody"></div><p class="law-f" style="margin:0"><span id="lawD"></span> <a id="lawU" target="_blank" rel="noopener">법령 사이트에서 보기</a></p></dialog>
+<script type="application/json" id="lawData">{{LAWS}}</script>
 <script>
 (function(){
  var KEY='weapon-manual-v4',mem={};
@@ -489,6 +504,24 @@ html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
  setOpen(get('weapon-memo-open','0')==='1');
  slots.forEach(paint);
  say();
+
+ var lawBox=document.getElementById('law'),lawBody=document.getElementById('lawBody'),laws=JSON.parse(document.getElementById('lawData').textContent);
+ function showLaw(b){
+  var l=laws.l[b.dataset.l],a=b.dataset.a,marks=(b.dataset.m||'').split(',').filter(Boolean),first=null,d=laws.d;
+  document.getElementById('lawT').textContent=l.n+' '+a;
+  document.getElementById('lawD').textContent=d.slice(0,4)+'. '+Number(d.slice(4,6))+'. '+Number(d.slice(6))+'. 기준 조문입니다.';
+  document.getElementById('lawU').href=encodeURI(l.k==='법령'?l.u+'/'+a:l.u);
+  lawBody.textContent='';
+  l.a[a].split('\n').forEach(function(t){
+   var p=document.createElement('p');p.textContent=t;
+   if(marks.some(function(m){return t.indexOf(m)===0})){p.className='hit';first=first||p}
+   lawBody.appendChild(p);
+  });
+  lawBox.showModal();lawBody.scrollTop=first?first.offsetTop-lawBody.offsetTop:0;
+ }
+ document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('.lr');if(b){e.preventDefault();showLaw(b)}});
+ document.getElementById('lawX').onclick=function(){lawBox.close()};
+ lawBox.addEventListener('click',function(e){if(e.target===lawBox)lawBox.close()});
 
  function route(){
   var id=decodeURIComponent(location.hash.slice(1))||'home';

@@ -15,10 +15,12 @@ MANUAL.md 작성 규칙
   ## [참고] 이름 | 설명        참고 자료
   [[참고 이름]]                참고 자료로 가는 링크
   [글자](https://주소)         외부 사이트 링크 (새 탭으로 열림)
+  법령명 제N조, 물리력 규칙 3.9.3 다   laws.json에 조문이 있으면 눌러서 볼 수 있게 자동 연결
 
 갈림길이나 링크의 대상이 없거나, 칸에 할 일이 없으면 빌드가 실패합니다.
 """
 import html
+import json
 import pathlib
 import re
 import sys
@@ -27,17 +29,90 @@ ROOT = pathlib.Path(__file__).parent
 SRC = ROOT / "MANUAL.md"
 OUT = ROOT / "index.html"
 TEMPLATE = ROOT / "template.html"
+LAWS = ROOT / "laws.json"
 
 ROLE_ID = {"현장 직원": "field", "현장 책임자": "command", "112상황실": "dispatch", "수사부서": "invest"}
 PARTS = {"금지": "ban", "무전": "talk", "완료 기준": "done", "근거": "law", "다음": "next"}
 TONE = {"위급": "red", "위험": "amber", "주의": "blue", "통제": "green"}
 SIT_PARTS = {"금지": "ban", "무전": "talk", "명령": "cmd"}
 BRANCH = re.compile(r"^- (.+?) -> (.+)$", re.M)
+ALIAS = {
+    "수사준칙": "검사와 사법경찰관의 상호협력과 일반적 수사준칙에 관한 규정",
+    "물리력 규칙": "경찰 물리력 행사의 기준과 방법에 관한 규칙",
+    "호송규칙": "피의자 유치 및 호송 규칙",
+    "직무집행법": "경찰관 직무집행법",
+    "112규칙": "112치안종합상황실 운영 및 신고처리 규칙",
+    "112법": "112신고의 운영 및 처리에 관한 법률",
+    "위해성장비 규정": "위해성 경찰장비의 사용기준 등에 관한 규정",
+    "정신건강복지법": "정신건강증진 및 정신질환자 복지서비스 지원에 관한 법률",
+}
+
+
+class Cite:
+    """본문의 법령 표기를 찾아 laws.json의 조문을 여는 버튼으로 바꾼다."""
+
+    def __init__(self):
+        data = json.loads(LAWS.read_text(encoding="utf-8")) if LAWS.exists() else {"fetched": "", "laws": {}}
+        self.fetched, self.laws = data["fetched"], data["laws"]
+        self.names = {n: n for n in self.laws}
+        self.names.update({k: v for k, v in ALIAS.items() if v in self.laws})
+        self.ids = {n: i for i, n in enumerate(self.laws)}
+        self.used, self.missed = {}, set()
+        names = "|".join(re.escape(n) for n in sorted(self.names, key=len, reverse=True)) or "(?!)"
+        self.pat = re.compile(
+            rf"<[^>]+>|(?P<law>(?<![가-힣])(?:{names}))"
+            r"|제(?P<from>\d+)~(?P<to>\d+)조"
+            r"|(?P<art>제\d+조(?:의\d+)?)(?P<mark>[①-⑳]*)"
+            r"|(?P<sec>(?<![\d.])\d\.\d+(?:\.\d+)?)(?P<mok> [가-하](?![가-힣]))?"
+            r"|(?P<stop> / |\. |\n)"
+        )
+
+    def __call__(self, s):
+        cur = [None]
+
+        def button(key, text, mark):
+            arts = self.laws[cur[0]]["articles"]
+            if key not in arts:
+                self.missed.add(f"{cur[0]} {key}")
+                return text
+            self.used.setdefault(cur[0], set()).add(key)
+            attr = f' data-m="{mark}"' if mark else ""
+            return f'<button type="button" class="lr" data-l="{self.ids[cur[0]]}" data-a="{key}"{attr}>{text}</button>'
+
+        def swap(m):
+            if m.group("law"):
+                cur[0] = self.names[m.group("law")]
+            elif m.group("stop"):
+                cur[0] = None
+            elif cur[0] and m.group("from"):
+                arts = self.laws[cur[0]]["articles"]
+                keys = [f"제{n}조" for n in range(int(m.group("from")), int(m.group("to")) + 1)]
+                arts[m.group(0)] = "\n".join(arts[k] for k in keys if k in arts)
+                return button(m.group(0), m.group(0), "")
+            elif cur[0] and m.group("art"):
+                return button(m.group("art"), m.group(0), ",".join(m.group("mark")))
+            elif cur[0] and m.group("sec") and m.group("sec") in self.laws[cur[0]]["articles"]:
+                mok = (m.group("mok") or "").strip()
+                return button(m.group("sec"), m.group(0), mok + "." if mok else "")
+            return m.group(0)
+
+        return self.pat.sub(swap, s)
+
+    def data(self):
+        out = {}
+        for name, keys in self.used.items():
+            law = self.laws[name]
+            out[self.ids[name]] = {"n": name, "k": law["kind"], "u": law["url"], "a": {k: law["articles"][k] for k in sorted(keys)}}
+        return json.dumps({"d": self.fetched, "l": out}, ensure_ascii=False).replace("</", "<\\/")
 
 
 class Doc:
     def __init__(self, refs):
         self.refs = refs
+        self.cite = Cite()
+
+    def text(self, s):
+        return self.cite(self.inline(s))
 
     def inline(self, s):
         s = html.escape(s, quote=False)
@@ -66,7 +141,7 @@ class Doc:
         for r in body:
             if len(r) != len(head):
                 sys.exit(f"표 열 수 불일치: {r}")
-            tds = "".join(f'<td data-h="{html.escape(h)}">{self.inline(c)}</td>' for h, c in zip(head, r))
+            tds = "".join(f'<td data-h="{html.escape(h)}">{self.text(c)}</td>' for h, c in zip(head, r))
             out.append(f"<tr>{tds}</tr>")
         out.append("</tbody></table></div>")
         return "".join(out)
@@ -87,12 +162,12 @@ class Doc:
                 out.append('<ul class="chk">')
                 while i < len(lines) and lines[i].startswith("- [ ] "):
                     counter[0] += 1
-                    out.append(f'<li><label><input type="checkbox" data-id="{sid}-{counter[0]}"><span>{self.inline(lines[i][6:])}</span></label>')
+                    out.append(f'<li><label><input type="checkbox" data-id="{sid}-{counter[0]}"><span>{self.text(lines[i][6:])}</span></label>')
                     i += 1
                     if i < len(lines) and lines[i].startswith("  - "):
                         out.append('<ul class="sub">')
                         while i < len(lines) and lines[i].startswith("  - "):
-                            out.append(f"<li>{self.inline(lines[i][4:])}</li>")
+                            out.append(f"<li>{self.text(lines[i][4:])}</li>")
                             i += 1
                         out.append("</ul>")
                     out.append("</li>")
@@ -100,26 +175,26 @@ class Doc:
             elif ln.startswith("- "):
                 out.append("<ul>")
                 while i < len(lines) and lines[i].startswith("- "):
-                    out.append(f"<li>{self.inline(lines[i][2:])}</li>")
+                    out.append(f"<li>{self.text(lines[i][2:])}</li>")
                     i += 1
                 out.append("</ul>")
             elif re.match(r"\d+\. ", ln):
                 out.append("<ol>")
                 while i < len(lines) and re.match(r"\d+\. ", lines[i]):
-                    out.append(f"<li>{self.inline(lines[i].split('. ', 1)[1])}</li>")
+                    out.append(f"<li>{self.text(lines[i].split('. ', 1)[1])}</li>")
                     i += 1
                 out.append("</ol>")
             elif ln.startswith("### "):
                 out.append(f"<h4>{self.inline(ln[4:])}</h4>")
                 i += 1
             elif ln.startswith("> "):
-                out.append(f'<p class="lead">{self.inline(ln[2:])}</p>')
+                out.append(f'<p class="lead">{self.text(ln[2:])}</p>')
                 i += 1
             elif ln.startswith('"'):
                 out.append(f'<p class="radio">{self.inline(ln)}</p>')
                 i += 1
             else:
-                out.append(f"<p>{self.inline(ln)}</p>")
+                out.append(f"<p>{self.text(ln)}</p>")
                 i += 1
         return "".join(out)
 
@@ -288,12 +363,15 @@ def main():
 
     note = "".join(f"<p>{doc.inline(n)}</p>" for n in notice)
     page = TEMPLATE.read_text(encoding="utf-8")
-    for key, val in {"{{TITLE}}": html.escape(title), "{{NOTICE}}": note, "{{CARDS}}": cards, "{{TABS}}": tabs, "{{VIEWS}}": views + "".join(ref_body)}.items():
+    for key, val in {"{{TITLE}}": html.escape(title), "{{NOTICE}}": note, "{{CARDS}}": cards, "{{TABS}}": tabs, "{{VIEWS}}": views + "".join(ref_body), "{{LAWS}}": doc.cite.data()}.items():
         page = page.replace(key, val)
     OUT.write_text(page, encoding="utf-8")
     checks = page.count('type="checkbox"')
     nodes = page.count('class="node"')
     print(f"완료: {OUT.name} {len(page):,}자, 역할 {len(roles)}개, 흐름 칸 {nodes}개, 긴급 카드 {len(sits)}개, 체크항목 {checks}개, 참고 {len(refs)}개")
+    print(f"조문 연결: {sum(page.count(k) for k in ['class="lr"'])}곳, 조문 {sum(len(v) for v in doc.cite.used.values())}개, 없는 조문 {len(doc.cite.missed)}개")
+    for m in sorted(doc.cite.missed):
+        print("  없음:", m)
 
 
 if __name__ == "__main__":
