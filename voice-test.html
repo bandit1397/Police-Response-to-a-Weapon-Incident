@@ -68,14 +68,16 @@ progress[hidden]{display:none}
 <script>
 (function(){
  var $=function(id){return document.getElementById(id)};
- var worker=null,loaded=false,busy=false,mr=null,stream=null,t0=0,timer=null,audioSec=0,files={};
+ var worker=null,loaded=false,busy=false,mr=null,stream=null,t0=0,timer=null,wait=null,audioSec=0,files={};
  $('ua').textContent='기기 정보: '+navigator.userAgent;
+ window.addEventListener('error',function(e){fail('오류: '+e.message)});
+ window.addEventListener('unhandledrejection',function(e){fail('오류: '+(e.reason&&e.reason.message||e.reason))});
  if(!navigator.gpu)$('device').options[1].disabled=true;
 
  function msg(id,t,err){$(id).textContent=t;$(id).className=err?'err':'mut'}
  function refresh(){$('rec').disabled=!loaded||busy;$('load').disabled=busy}
  function fail(t){
-  busy=false;refresh();$('bar').hidden=true;
+  clearInterval(wait);busy=false;refresh();$('bar').hidden=true;
   msg(loaded?'recMsg':'loadMsg',t,true);
  }
  function startWorker(){
@@ -92,7 +94,7 @@ progress[hidden]{display:none}
     loaded=true;busy=false;$('bar').hidden=true;refresh();
     msg('loadMsg','준비 완료 ('+(m.ms/1000).toFixed(1)+'초). 이제 녹음할 수 있습니다.');
    }else if(m.type==='done'){
-    busy=false;refresh();msg('recMsg','변환 완료');
+    clearInterval(wait);busy=false;refresh();msg('recMsg','변환 완료');
     show(m);
    }else if(m.type==='error')fail('오류: '+m.message);
   };
@@ -111,7 +113,9 @@ progress[hidden]{display:none}
  };
  function finish(chunks,type){
   stream.getTracks().forEach(function(t){t.stop()});stream=null;
-  busy=true;refresh();msg('recMsg','글자로 바꾸는 중입니다. 화면을 켜 두세요.');
+  busy=true;refresh();
+  var w0=Date.now(),say=function(){msg('recMsg','글자로 바꾸는 중 '+Math.floor((Date.now()-w0)/1000)+'초. 화면을 켜 두세요.')};
+  say();wait=setInterval(say,1000);
   new Blob(chunks,{type:type}).arrayBuffer().then(function(buf){
    var C=window.AudioContext||window.webkitAudioContext,ctx=new C({sampleRate:16000});
    return ctx.decodeAudioData(buf).then(function(a){ctx.close();return a});
