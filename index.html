@@ -348,6 +348,11 @@ html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
   sttBox.hidden=!stt&&!any;sttWarn.hidden=!stt;
   paintHead();
  }
+ function sttFollow(r){
+  var l=r.slot.out.lastChild;if(!l)return;
+  var b=l.getBoundingClientRect(),m=memoBody.getBoundingClientRect(),d=b.bottom-m.bottom;
+  if(d>0||b.bottom<m.top)memoBody.scrollTop+=d;
+ }
  function sttStart(r){
   if(!stt||!SR)return;
   var x=new SR();
@@ -378,7 +383,7 @@ html[data-theme=dark] #sttToggle[aria-pressed=true]{color:#10141a}
    }
    r.mid=mid;
    if(quick>=3){quick=0;say(r.slot.name+' 글자 변환 다시 연결됨.')}
-   if(!r.dead){r.entry.text=(r.final+mid).trim();paintText()}
+   if(!r.dead){r.entry.text=(r.final+mid).trim();paintText();sttFollow(r)}
   };
   x.onerror=function(e){
    if(e.error==='no-speech'||e.error==='aborted')return;
