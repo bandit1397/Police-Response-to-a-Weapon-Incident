@@ -25,9 +25,8 @@ progress{width:100%;margin-top:8px}
 progress[hidden]{display:none}
 .mut{color:var(--mut);font-size:14px}
 .err{color:var(--ban);font-weight:700}
-.item{border-top:1px solid var(--line);padding:8px 0}
-.item:first-child{border-top:0}
-.item b{display:block;white-space:pre-wrap;font-weight:500}
+#text{min-height:96px;font-size:18px;white-space:pre-wrap}
+#mid{color:var(--mut)}
 </style>
 </head>
 <body>
@@ -39,46 +38,82 @@ progress[hidden]{display:none}
  <section class="card">
   <h2>1. 모델 받기</h2>
   <p class="mut">Wi-Fi에서 받으세요. 한 번 받으면 다음부터는 대부분 다시 받지 않습니다.</p>
-  <label for="size">모델</label>
-  <select id="size">
-   <option value="tiny">가장 빠름 (약 41MB)</option>
-   <option value="base" selected>보통 (약 77MB)</option>
-   <option value="small">가장 정확 (약 249MB, 휴대폰이 느리거나 멈출 수 있음)</option>
+  <label for="model">모델</label>
+  <select id="model">
+   <option value="tiny/q8">가장 빠름 (약 28MB)</option>
+   <option value="base/q8" selected>보통 (약 64MB)</option>
+   <option value="base/fp32">가장 정확 (약 247MB, 휴대폰이 느리거나 멈출 수 있음)</option>
   </select>
-  <label for="device">처리 방식</label>
-  <select id="device"><option value="wasm">기본</option><option value="webgpu">그래픽 칩 사용 (더 빠를 수 있음)</option></select>
   <button id="load" type="button">모델 받기</button>
   <progress id="bar" max="100" value="0" hidden></progress>
   <p id="loadMsg" class="mut" role="status"></p>
  </section>
 
  <section class="card">
-  <h2>2. 말하고 변환하기</h2>
-  <p class="mut">모델을 받은 뒤 비행기 모드를 켜고 시험하면, 인터넷 없이 이 휴대폰에서만 변환되는지 직접 확인할 수 있습니다.</p>
+  <h2>2. 말하기</h2>
+  <p class="mut">말하는 동안 글자가 나옵니다. 흐린 글자는 아직 고쳐질 수 있는 글자입니다.</p>
   <button id="rec" type="button" disabled>녹음 시작</button>
   <p id="recMsg" class="mut" role="status"></p>
- </section>
-
- <section class="card">
-  <h2>3. 결과</h2>
-  <div id="out"><p class="mut">아직 결과가 없습니다.</p></div>
+  <div id="text"><span id="fin"></span><span id="mid"></span></div>
+  <p id="stat" class="mut"></p>
  </section>
  <p class="mut" id="ua"></p>
 </main>
 <script>
 (function(){
  var $=function(id){return document.getElementById(id)};
- var worker=null,loaded=false,busy=false,mr=null,stream=null,t0=0,timer=null,wait=null,audioSec=0,files={};
+ var RATE=16000,MIN=3*RATE,MAX=9*RATE,STEP=RATE,QUIET=.008;
+ var worker=null,loaded=false,loading=false,running=false,working=false;
+ var ctx=null,src=null,proc=null,stream=null,timer=null,t0=0;
+ var buf=new Float32Array(MAX+RATE),len=0,sent=0,seg=0,queue=[],stopAt=0,total=0,net=0,files={};
  $('ua').textContent='기기 정보: '+navigator.userAgent;
  window.addEventListener('error',function(e){fail('오류: '+e.message)});
  window.addEventListener('unhandledrejection',function(e){fail('오류: '+(e.reason&&e.reason.message||e.reason))});
- if(!navigator.gpu)$('device').options[1].disabled=true;
 
  function msg(id,t,err){$(id).textContent=t;$(id).className=err?'err':'mut'}
- function refresh(){$('rec').disabled=!loaded||busy;$('load').disabled=busy}
+ function refresh(){$('rec').disabled=!loaded||!!stopAt;$('load').disabled=loading||running}
  function fail(t){
-  clearInterval(wait);busy=false;refresh();$('bar').hidden=true;
-  msg(loaded?'recMsg':'loadMsg',t,true);
+  loading=false;working=false;queue=[];stopAt=0;$('bar').hidden=true;
+  if(running)stop();
+  stopAt=0;queue=[];refresh();msg(loaded?'recMsg':'loadMsg',t,true);
+ }
+ function rms(a,from,to){var s=0;for(var i=from;i<to;i++)s+=a[i]*a[i];return Math.sqrt(s/Math.max(1,to-from))}
+ function loud(a){
+  for(var i=0;i+1600<=a.length;i+=1600)if(rms(a,i,i+1600)>QUIET)return true;
+  return false;
+ }
+ function pump(){
+  if(working)return;
+  var job=null;
+  if(queue.length)job=queue.shift();
+  else if(running&&len>=STEP&&len-sent>=STEP){
+   sent=len;var a=buf.slice(0,len);
+   if(loud(a))job={audio:a,id:seg,final:false};
+  }
+  if(job){working=true;worker.postMessage({type:'run',audio:job.audio,id:job.id,final:job.final},[job.audio.buffer])}
+  else if(stopAt&&!queue.length)done();
+ }
+ function done(){
+  var lag=(Date.now()-stopAt)/1000;stopAt=0;$('mid').textContent='';refresh();
+  msg('recMsg','완료. 말을 끝낸 뒤 '+lag.toFixed(1)+'초 만에 글자가 완성됐습니다.');
+  $('stat').textContent='음성 '+(total/RATE).toFixed(1)+'초 · 변환 중 네트워크 요청 '+net+'건';
+ }
+ function cutAt(n){
+  var a=buf.slice(0,n);seg++;
+  if(loud(a))queue.push({audio:a,id:seg-1,final:true});
+  buf.copyWithin(0,n,len);len-=n;sent=0;$('mid').textContent='';
+ }
+ function feed(x){
+  if(len+x.length>buf.length)return;
+  buf.set(x,len);len+=x.length;total+=x.length;
+  var w=Math.round(.5*RATE);
+  if(len>=MIN&&rms(buf,len-w,len)<.15*rms(buf,0,len-w))cutAt(len-Math.round(w/2));
+  else if(len>=MAX){
+   var best=len,low=1e9;
+   for(var i=len-MIN;i+1600<=len;i+=800){var r=rms(buf,i,i+1600);if(r<low){low=r;best=i+800}}
+   cutAt(best);
+  }
+  pump();
  }
  function startWorker(){
   if(worker)worker.terminate();
@@ -91,50 +126,43 @@ progress[hidden]{display:none}
     var a=0,b=0;Object.keys(files).forEach(function(k){a+=files[k][0];b+=files[k][1]});
     $('bar').value=b?a/b*100:0;msg('loadMsg','받는 중 '+Math.round(a/1e6)+' / '+Math.round(b/1e6)+'MB');
    }else if(m.type==='ready'){
-    loaded=true;busy=false;$('bar').hidden=true;refresh();
-    msg('loadMsg','준비 완료 ('+(m.ms/1000).toFixed(1)+'초). 이제 녹음할 수 있습니다.');
+    loaded=true;loading=false;$('bar').hidden=true;refresh();
+    msg('loadMsg','준비 완료 ('+(m.ms/1000).toFixed(1)+'초). 이제 말할 수 있습니다.');
    }else if(m.type==='done'){
-    clearInterval(wait);busy=false;refresh();msg('recMsg','변환 완료');
-    show(m);
+    working=false;net+=m.net;
+    if(m.final)$('fin').textContent+=(m.text?m.text+' ':'');
+    else if(m.id===seg)$('mid').textContent=m.text;
+    pump();
    }else if(m.type==='error')fail('오류: '+m.message);
   };
  }
- function show(m){
-  var box=$('out');if(box.querySelector('p'))box.textContent='';
-  var d=document.createElement('div');d.className='item';
-  var b=document.createElement('b');b.textContent=m.text||'(인식된 말이 없습니다)';
-  var s=document.createElement('span');s.className='mut';
-  s.textContent=$('size').selectedOptions[0].textContent.split(' (')[0]+' · 음성 '+audioSec.toFixed(1)+'초 · 변환 '+(m.ms/1000).toFixed(1)+'초 · 변환 중 네트워크 요청 '+m.net+'건';
-  d.appendChild(b);d.appendChild(s);box.insertBefore(d,box.firstChild);
+ function stop(){
+  running=false;clearInterval(timer);
+  proc.disconnect();src.disconnect();stream.getTracks().forEach(function(t){t.stop()});ctx.close();
+  $('rec').classList.remove('on');$('rec').textContent='녹음 시작';
  }
  $('load').onclick=function(){
-  loaded=false;busy=true;files={};refresh();$('bar').hidden=false;$('bar').value=0;msg('loadMsg','준비 중입니다.');
-  startWorker();worker.postMessage({type:'load',size:$('size').value,device:$('device').value});
+  var v=$('model').value.split('/');
+  loaded=false;loading=true;files={};refresh();$('bar').hidden=false;$('bar').value=0;msg('loadMsg','준비 중입니다.');
+  startWorker();worker.postMessage({type:'load',size:v[0],dtype:v[1]});
  };
- function finish(chunks,type){
-  stream.getTracks().forEach(function(t){t.stop()});stream=null;
-  busy=true;refresh();
-  var w0=Date.now(),say=function(){msg('recMsg','글자로 바꾸는 중 '+Math.floor((Date.now()-w0)/1000)+'초. 화면을 켜 두세요.')};
-  say();wait=setInterval(say,1000);
-  new Blob(chunks,{type:type}).arrayBuffer().then(function(buf){
-   var C=window.AudioContext||window.webkitAudioContext,ctx=new C({sampleRate:16000});
-   return ctx.decodeAudioData(buf).then(function(a){ctx.close();return a});
-  }).then(function(a){
-   audioSec=a.duration;
-   var pcm=a.getChannelData(0).slice();
-   worker.postMessage({type:'run',audio:pcm},[pcm.buffer]);
-  }).catch(function(e){fail('녹음을 읽지 못했습니다: '+e.message)});
- }
  $('rec').onclick=function(){
-  if(mr){clearInterval(timer);mr.stop();mr=null;$('rec').classList.remove('on');$('rec').textContent='녹음 시작';return}
+  if(running){
+   stop();stopAt=Date.now();refresh();msg('recMsg','마무리 중입니다.');
+   if(len>=1600)cutAt(len);else{len=0;sent=0}
+   pump();return;
+  }
+  var C=window.AudioContext||window.webkitAudioContext;
+  ctx=new C({sampleRate:RATE});ctx.resume();
   navigator.mediaDevices.getUserMedia({audio:true}).then(function(st){
-   stream=st;var chunks=[],r=new MediaRecorder(st);mr=r;
-   r.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};
-   r.onstop=function(){finish(chunks,r.mimeType||'audio/webm')};
-   r.start();t0=Date.now();$('rec').classList.add('on');$('rec').textContent='녹음 끝내고 변환';
-   msg('recMsg','녹음 중 0초');
-   timer=setInterval(function(){msg('recMsg','녹음 중 '+Math.floor((Date.now()-t0)/1000)+'초')},1000);
-  }).catch(function(e){msg('recMsg','마이크를 쓸 수 없습니다('+e.name+').',true)});
+   stream=st;src=ctx.createMediaStreamSource(st);proc=ctx.createScriptProcessor(2048,1,1);
+   proc.onaudioprocess=function(e){if(running)feed(new Float32Array(e.inputBuffer.getChannelData(0)))};
+   src.connect(proc);proc.connect(ctx.destination);
+   len=0;sent=0;seg=0;queue=[];total=0;net=0;$('fin').textContent='';$('mid').textContent='';$('stat').textContent='';
+   running=true;t0=Date.now();refresh();$('rec').classList.add('on');$('rec').textContent='녹음 끝내기';
+   msg('recMsg','듣는 중 0초');
+   timer=setInterval(function(){msg('recMsg','듣는 중 '+Math.floor((Date.now()-t0)/1000)+'초')},1000);
+  }).catch(function(e){ctx.close();msg('recMsg','마이크를 쓸 수 없습니다('+e.name+').',true)});
  };
 })();
 </script>
