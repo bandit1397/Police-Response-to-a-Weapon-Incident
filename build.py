@@ -7,6 +7,7 @@ MANUAL.md 작성 규칙
   > 핵심: 문장                  현장 직원 첫 화면의 핵심 행동 (## [역할] 바로 아래)
   ### = 단계 이름 | 설명        흐름도를 묶는 단계 제목
   ### 칸 제목 | 한 줄 요약      흐름도의 칸
+  - [ ] 항목 / "  - 내용"       체크 항목과 그 아래 하부사항(체크 없음)
   ### ? 판단 질문              판단 칸. 아래 "- 답 -> 칸 제목"으로 갈림길을 적음
   #### 금지 / 무전 / 완료 기준 / 근거 / 다음    칸 안의 항목
   ## [상황] 이름 | 설명 | 등급  현장 직원 긴급 카드. 등급은 위급/위험/주의/통제.
@@ -83,8 +84,15 @@ class Doc:
                 out.append('<ul class="chk">')
                 while i < len(lines) and lines[i].startswith("- [ ] "):
                     counter[0] += 1
-                    out.append(f'<li><label><input type="checkbox" data-id="{sid}-{counter[0]}"><span>{self.inline(lines[i][6:])}</span></label></li>')
+                    out.append(f'<li><label><input type="checkbox" data-id="{sid}-{counter[0]}"><span>{self.inline(lines[i][6:])}</span></label>')
                     i += 1
+                    if i < len(lines) and lines[i].startswith("  - "):
+                        out.append('<ul class="sub">')
+                        while i < len(lines) and lines[i].startswith("  - "):
+                            out.append(f"<li>{self.inline(lines[i][4:])}</li>")
+                            i += 1
+                        out.append("</ul>")
+                    out.append("</li>")
                 out.append("</ul>")
             elif ln.startswith("- "):
                 out.append("<ul>")
